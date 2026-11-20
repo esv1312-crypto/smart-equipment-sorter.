@@ -23,12 +23,12 @@ def load_config():
             data = json.loads(CONFIG.read_text(encoding="utf-8"))
             data.setdefault("categories", DEFAULT_CATEGORIES[:])
             data.setdefault("examples", {})
-            data.setdefault("threshold", 0.72)
+            data.setdefault("threshold", 0.58)
             data.setdefault("history", [])
             return data
         except Exception:
             pass
-    return {"categories": DEFAULT_CATEGORIES[:], "examples": {}, "threshold": 0.72, "history": []}
+    return {"categories": DEFAULT_CATEGORIES[:], "examples": {}, "threshold": 0.58, "history": []}
 
 def save_config(data):
     BASE.mkdir(parents=True, exist_ok=True)
@@ -139,16 +139,16 @@ class SorterApp:
         actions = ttk.Frame(self.tab_sort); actions.pack(fill="x", pady=(0, 8))
         self.threshold_var = tk.DoubleVar(value=float(self.data.get("threshold", .72)))
         ttk.Label(actions, text="Порог сходства:").pack(side="left")
-        ttk.Scale(actions, from_=0.45, to=0.95, variable=self.threshold_var, length=180).pack(side="left", padx=6)
-        self.threshold_label = ttk.Label(actions, text="72%")
+        ttk.Scale(actions, from_=0.25, to=0.90, variable=self.threshold_var, length=180).pack(side="left", padx=6)
+        self.threshold_label = ttk.Label(actions, text=f"{self.threshold_var.get():.2f}")
         self.threshold_label.pack(side="left")
-        self.threshold_var.trace_add("write", lambda *_: self.threshold_label.config(text=f"{self.threshold_var.get():.0%}"))
+        self.threshold_var.trace_add("write", lambda *_: self.threshold_label.config(text=f"{self.threshold_var.get():.2f}"))
         ttk.Button(actions, text="Начать анализ", command=self.start_analysis).pack(side="left", padx=12)
         ttk.Button(actions, text="Копировать подтверждённые", command=self.copy_results).pack(side="left")
         ttk.Button(actions, text="Сохранить изменения", command=self.save_manual).pack(side="left", padx=6)
         columns = ("file", "category", "score", "state")
         self.tree = ttk.Treeview(self.tab_sort, columns=columns, show="headings", selectmode="browse")
-        for col, title, width in [("file","Файл",460),("category","Категория",190),("score","Сходство",100),("state","Статус",140)]:
+        for col, title, width in [("file","Файл",460),("category","Категория",190),("score","Сходство CLIP",110),("state","Статус",140)]:
             self.tree.heading(col, text=title); self.tree.column(col, width=width, anchor="w")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", self.change_selected)

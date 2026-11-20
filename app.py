@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
+from core import classify_embedding, iter_image_files
 
 APP_NAME = "Умный сортировщик оборудования"
 MODEL_ID = "openai/clip-vit-base-patch32"
@@ -127,7 +128,9 @@ class SorterApp:
         ttk.Label(right, text="Фотографии-образцы выбранной категории", font=("Segoe UI", 11, "bold")).pack(anchor="w")
         self.examples_list = tk.Listbox(right, height=18, font=("Segoe UI", 9))
         self.examples_list.pack(fill="both", expand=True, pady=6)
-        ttk.Button(right, text="Добавить фото-образцы", command=self.add_examples).pack(anchor="w")
+        sample_actions = ttk.Frame(right); sample_actions.pack(anchor="w")
+        ttk.Button(sample_actions, text="Добавить фото-образцы", command=self.add_examples).pack(side="left")
+        ttk.Button(sample_actions, text="Удалить выбранный образец", command=self.delete_example).pack(side="left", padx=6)
         ttk.Label(right, text="Совет: добавляйте разные модели, цвета и ракурсы одного типа оборудования.",
                   foreground="#555", wraplength=600).pack(anchor="w", pady=10)
 
@@ -212,6 +215,28 @@ class SorterApp:
         save_config(self.data); self.show_examples()
         self.status.set(f"Добавлено образцов: {len(paths)} для категории «{cat}».")
 
+    def delete_example(self):
+        cat = self.selected_category()
+        selection = self.examples_list.curselection()
+        if not cat or not selection:
+            messagebox.showinfo("Образец не выбран", "Выберите фотографию образца в списке.")
+            return
+        paths = self.data["examples"].get(cat, [])
+        index = selection[0]
+        if index >= len(paths):
+            return
+        path = paths[index]
+        if not messagebox.askyesno("Удаление образца", f"Удалить образец «{Path(path).name}» из категории «{cat}»?"):
+            return
+        paths.pop(index)
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        save_config(self.data)
+        self.show_examples()
+        self.status.set(f"Образец удалён из категории «{cat}».")
+
     def pick_source(self):
         p = filedialog.askdirectory(title="Выберите папку с фотографиями")
         if p: self.source_dir.set(p)
@@ -228,6 +253,12 @@ class SorterApp:
         source = Path(self.source_dir.get())
         if not source.is_dir():
             messagebox.showwarning("Папка не выбрана", "Выберите существующую исходную папку."); return
+        target_text = self.output_dir.get().strip()
+        if target_text:
+            target = Path(target_text).expanduser().resolve()
+            if target == source.resolve():
+                messagebox.showwarning("Папки совпадают", "Папка результата не может совпадать с исходной папкой.")
+                return
         samples = {c: list(self.data["examples"].get(c, [])) for c in self.data["categories"] if self.data["examples"].get(c)}
         if not samples:
             messagebox.showwarning("Нет образцов", "Сначала добавьте хотя бы один фото-образец."); self.tabs.select(self.tab_samples); return
@@ -244,20 +275,26 @@ class SorterApp:
                 for p in paths:
                     if Path(p).is_file():
                         vectors[cat].append(self.engine.embed(p))
-            files = [p for p in source.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+            excluded = [BASE]
+            if self.output_dir.get().strip():
+                excluded.append(Path(self.output_dir.get()).expanduser().resolve())
+            files = list(iter_image_files(source, IMAGE_EXTS, excluded))
             self.results = []
             self.root.after(0, self.progress.configure, {"maximum": max(1, len(files)), "value": 0})
             threshold = float(self.data.get("threshold", .72))
             for i, path in enumerate(files, 1):
                 try:
                     v = self.engine.embed(path)
-                    best_cat, best_score = "На проверку", -1.0
-                    for cat, refs in vectors.items():
-                        if not refs: continue
-                        score = max(cosine(v, ref) for ref in refs)
-                        if score > best_score: best_cat, best_score = cat, score
-                    category = best_cat if best_score >= threshold else "На проверку"
-                    self.results.append({"path":str(path), "category":category, "score":best_score, "state":"Готово"})
+                    category, best_score, margin, ranked = classify_embedding(
+                        v, vectors, threshold=threshold, min_margin=0.035
+                    )
+                    state = "Готово"
+                    if category == "На проверку" and ranked:
+                        state = "Низкое сходство или неоднозначный результат"
+                    self.results.append({
+                        "path": str(path), "category": category, "score": best_score,
+                        "margin": margin, "state": state
+                    })
                 except Exception as e:
                     self.results.append({"path":str(path), "category":"На проверку", "score":0.0, "state":f"Ошибка: {str(e)[:45]}"})
                 if i % 5 == 0 or i == len(files):

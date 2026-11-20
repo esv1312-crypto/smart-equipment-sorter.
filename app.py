@@ -273,7 +273,7 @@ class SorterApp:
     def show_results(self):
         self.tree.delete(*self.tree.get_children())
         for i, r in enumerate(self.results):
-            score = "—" if r["score"] < 0 else f"{r['score']:.0%}"
+            score = "—" if r["score"] < 0 else f"{r['score']:.3f}"
             self.tree.insert("", "end", iid=str(i), values=(Path(r["path"]).name, r["category"], score, r["state"]))
         self.tabs.select(self.tab_sort)
 

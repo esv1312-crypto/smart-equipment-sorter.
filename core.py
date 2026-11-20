@@ -25,9 +25,15 @@ def rank_categories(
     """Ранжирует категории; оценка категории — лучший score среди её образцов."""
     ranked = []
     for category, references in category_vectors.items():
-        scores = [cosine(image_vector, ref) for ref in references if len(ref) == len(image_vector)]
+        scores = sorted(
+            (cosine(image_vector, ref) for ref in references if len(ref) == len(image_vector)),
+            reverse=True,
+        )
         if scores:
-            ranked.append((category, max(scores)))
+            # With multiple examples, average the two closest matches. This reduces
+            # accidental high scores caused by a single unusual reference photo.
+            top_scores = scores[:2]
+            ranked.append((category, sum(top_scores) / len(top_scores)))
     return sorted(ranked, key=lambda item: item[1], reverse=True)
 
 

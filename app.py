@@ -57,12 +57,19 @@ class ClipEngine:
 
     def embed(self, image_path):
         from PIL import Image, ImageOps
-        image = Image.open(image_path)
-        image = ImageOps.exif_transpose(image).convert("RGB")
-        inputs = self.processor(images=image, return_tensors="pt")
+        with Image.open(image_path) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+        # CLIP's standard center crop can cut off a large attachment near an edge.
+        # Compare both its standard view and a full-frame, aspect-ratio-preserving view.
+        full_frame = ImageOps.pad(
+            image, (224, 224), method=Image.Resampling.LANCZOS, color=(127, 127, 127)
+        )
+        inputs = self.processor(images=[image, full_frame], return_tensors="pt")
         with self.torch.inference_mode():
-            vector = self.model.get_image_features(**inputs)
-            vector = vector / vector.norm(p=2, dim=-1, keepdim=True)
+            vectors = self.model.get_image_features(**inputs)
+            vectors = vectors / vectors.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-12)
+            vector = vectors.mean(dim=0, keepdim=True)
+            vector = vector / vector.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-12)
         return vector[0].cpu().tolist()
 
 def cosine(a, b):
@@ -140,7 +147,7 @@ class SorterApp:
         self._path_row(paths, "Исходная папка:", self.source_dir, self.pick_source)
         self._path_row(paths, "Папка результата:", self.output_dir, self.pick_output)
         actions = ttk.Frame(self.tab_sort); actions.pack(fill="x", pady=(0, 8))
-        self.threshold_var = tk.DoubleVar(value=float(self.data.get("threshold", .72)))
+        self.threshold_var = tk.DoubleVar(value=float(self.data.get("threshold", .58)))
         ttk.Label(actions, text="Порог сходства:").pack(side="left")
         ttk.Scale(actions, from_=0.25, to=0.90, variable=self.threshold_var, length=180).pack(side="left", padx=6)
         self.threshold_label = ttk.Label(actions, text=f"{self.threshold_var.get():.2f}")
@@ -185,7 +192,7 @@ class SorterApp:
         if not name: return
         name = name.strip()
         if name and name not in self.data["categories"]:
-            self.data["categories"].insert(-2, name)
+            self.data["categories"].insert(max(0, len(self.data["categories"]) - 2), name)
             self.data["examples"].setdefault(name, [])
             save_config(self.data); self.refresh_categories()
 
@@ -281,7 +288,7 @@ class SorterApp:
             files = list(iter_image_files(source, IMAGE_EXTS, excluded))
             self.results = []
             self.root.after(0, self.progress.configure, {"maximum": max(1, len(files)), "value": 0})
-            threshold = float(self.data.get("threshold", .72))
+            threshold = float(self.data.get("threshold", .58))
             for i, path in enumerate(files, 1):
                 try:
                     v = self.engine.embed(path)
@@ -323,7 +330,7 @@ class SorterApp:
         choices = [c for c in self.data["categories"] if c != "На проверку"]
         choice = simpledialog.askstring("Изменить категорию",
             "Введите категорию из списка:\n" + ", ".join(choices), initialvalue=r["category"], parent=self.root)
-        if choice and choice in self.data["categories"]:
+        if choice and choice in self.data["categories"] and choice != "На проверку":
             r["category"] = choice; r["state"] = "Изменено вручную"
             self.tree.set(str(idx), "category", choice); self.tree.set(str(idx), "state", r["state"])
 

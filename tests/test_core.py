@@ -21,6 +21,12 @@ class RankingTests(unittest.TestCase):
         result = classify_embedding([-1.0, 0.0], vectors, threshold=0.1)
         self.assertEqual(result[0], "На проверку")
 
+
+    def test_two_best_examples_are_averaged(self):
+        vectors = {"A": [[1.0, 0.0], [0.0, 1.0]], "B": [[0.7, 0.714142842]]}
+        ranked = rank_categories([1.0, 0.0], vectors)
+        self.assertAlmostEqual(ranked[0][1], 0.5, places=6)
+
     def test_ranking_is_descending(self):
         ranked = rank_categories([1.0, 0.0], {"B": [[0.0, 1.0]], "A": [[1.0, 0.0]]})
         self.assertEqual(ranked[0][0], "A")

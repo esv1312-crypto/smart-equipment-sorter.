@@ -25,7 +25,9 @@ class RankingTests(unittest.TestCase):
     def test_two_best_examples_are_averaged(self):
         vectors = {"A": [[1.0, 0.0], [0.0, 1.0]], "B": [[0.7, 0.714142842]]}
         ranked = rank_categories([1.0, 0.0], vectors)
-        self.assertAlmostEqual(ranked[0][1], 0.5, places=6)
+        scores = dict(ranked)
+        self.assertAlmostEqual(scores["A"], 0.5, places=6)
+        self.assertGreater(scores["B"], scores["A"])
 
     def test_ranking_is_descending(self):
         ranked = rank_categories([1.0, 0.0], {"B": [[0.0, 1.0]], "A": [[1.0, 0.0]]})

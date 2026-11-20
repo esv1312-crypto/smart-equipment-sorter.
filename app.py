@@ -301,9 +301,14 @@ class SorterApp:
         target = Path(self.output_dir.get())
         if not self.output_dir.get():
             messagebox.showwarning("Папка назначения", "Выберите папку результата."); return
-        if not messagebox.askyesno("Подтверждение", f"Скопировать {len(self.results)} фотографий в папки категорий? Исходники останутся без изменений."): return
+        approved = [r for r in self.results if r["category"] != "На проверку" and not str(r["state"]).startswith("Ошибка")]
+        if not approved:
+            messagebox.showinfo("Нет подтверждённых результатов", "Все фотографии находятся на проверке либо содержат ошибки.")
+            return
+        if not messagebox.askyesno("Подтверждение", f"Скопировать {len(approved)} подтверждённых фотографий? Остальные останутся без копирования. Исходники не изменяются."):
+            return
         copied = 0
-        for r in self.results:
+        for r in approved:
             cat = r["category"]
             folder = target / cat; folder.mkdir(parents=True, exist_ok=True)
             src = Path(r["path"]); dst = folder / src.name

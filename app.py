@@ -14,7 +14,7 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 BASE = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SmartEquipmentSorter"
 EXAMPLES = BASE / "examples"
 CONFIG = BASE / "config.json"
-DEFAULT_CATEGORIES = ["Гидробуры", "Гидромолоты", "Шнеки", "Щётки", "Вибропогружатели", "Быстросъёмы", "Ковши", "Захваты", "Другое", "На проверку"]
+DEFAULT_CATEGORIES = ["Другое", "На проверку"]
 
 def load_config():
     BASE.mkdir(parents=True, exist_ok=True)

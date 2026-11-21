@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import sqlite3
+import struct
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -86,3 +88,83 @@ def iter_image_files(
             path = root_path / filename
             if path.suffix.lower() in extensions and path.is_file():
                 yield path
+
+
+class EmbeddingCache:
+    """SQLite-кеш эмбеддингов, привязанный к пути, версии модели и метаданным файла."""
+
+    def __init__(self, database_path: Path):
+        self.database_path = Path(database_path)
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(str(self.database_path), timeout=30)
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                path TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                dimension INTEGER NOT NULL,
+                vector BLOB NOT NULL,
+                PRIMARY KEY (path, model_id)
+            )
+        """)
+        self.connection.commit()
+        self.hits = 0
+        self.misses = 0
+        self.writes = 0
+
+    @staticmethod
+    def _identity(path: Path):
+        resolved = Path(path).expanduser().resolve()
+        stat = resolved.stat()
+        return os.path.normcase(str(resolved)).casefold(), stat.st_size, stat.st_mtime_ns
+
+    def get(self, path: Path, model_id: str):
+        try:
+            key, size, mtime_ns = self._identity(path)
+            row = self.connection.execute(
+                "SELECT file_size, mtime_ns, dimension, vector FROM embeddings "
+                "WHERE path = ? AND model_id = ?", (key, model_id)
+            ).fetchone()
+            if row is None or row[0] != size or row[1] != mtime_ns:
+                self.misses += 1
+                return None
+            dimension, blob = row[2], row[3]
+            if dimension <= 0 or len(blob) != dimension * 4:
+                self.connection.execute(
+                    "DELETE FROM embeddings WHERE path = ? AND model_id = ?", (key, model_id)
+                )
+                self.connection.commit()
+                self.misses += 1
+                return None
+            vector = list(struct.unpack(f"<{dimension}f", blob))
+            self.hits += 1
+            return vector
+        except (OSError, sqlite3.Error, ValueError, struct.error):
+            self.misses += 1
+            return None
+
+    def put(self, path: Path, model_id: str, vector):
+        try:
+            key, size, mtime_ns = self._identity(path)
+            values = [float(value) for value in vector]
+            if not values:
+                return False
+            blob = struct.pack(f"<{len(values)}f", *values)
+            self.connection.execute(
+                "INSERT INTO embeddings(path, model_id, file_size, mtime_ns, dimension, vector) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(path, model_id) DO UPDATE SET "
+                "file_size=excluded.file_size, mtime_ns=excluded.mtime_ns, "
+                "dimension=excluded.dimension, vector=excluded.vector",
+                (key, model_id, size, mtime_ns, len(values), sqlite3.Binary(blob)),
+            )
+            self.connection.commit()
+            self.writes += 1
+            return True
+        except (OSError, sqlite3.Error, ValueError, struct.error):
+            return False
+
+    def close(self):
+        self.connection.close()

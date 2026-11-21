@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import classify_embedding, iter_image_files, rank_categories
+from core import EmbeddingCache, classify_embedding, iter_image_files, rank_categories
 
 
 class RankingTests(unittest.TestCase):
@@ -46,6 +46,57 @@ class FileScanTests(unittest.TestCase):
             (root / ".git" / "three.jpg").write_bytes(b"x")
             found = list(iter_image_files(root, {".jpg"}, [root / "output"]))
             self.assertEqual([p.name for p in found], ["one.jpg"])
+
+
+class EmbeddingCacheTests(unittest.TestCase):
+    def test_cache_miss_then_hit_roundtrip(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "sample.jpg"
+            image.write_bytes(b"image-bytes")
+            cache = EmbeddingCache(root / "cache.sqlite3")
+            self.assertIsNone(cache.get(image, "model-v1"))
+            vector = [0.125, -0.5, 0.875]
+            self.assertTrue(cache.put(image, "model-v1", vector))
+            self.assertEqual(cache.get(image, "model-v1"), vector)
+            self.assertEqual(cache.hits, 1)
+            cache.close()
+
+    def test_file_change_invalidates_entry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "sample.jpg"
+            image.write_bytes(b"old")
+            cache = EmbeddingCache(root / "cache.sqlite3")
+            cache.put(image, "model-v1", [1.0, 0.0])
+            image.write_bytes(b"new content")
+            self.assertIsNone(cache.get(image, "model-v1"))
+            cache.close()
+
+    def test_model_id_is_part_of_cache_key(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "sample.jpg"
+            image.write_bytes(b"image")
+            cache = EmbeddingCache(root / "cache.sqlite3")
+            cache.put(image, "model-v1", [1.0, 0.0])
+            self.assertIsNone(cache.get(image, "model-v2"))
+            cache.close()
+
+    def test_corrupt_vector_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "sample.jpg"
+            image.write_bytes(b"image")
+            cache = EmbeddingCache(root / "cache.sqlite3")
+            cache.put(image, "model-v1", [1.0, 0.0])
+            cache.connection.execute(
+                "UPDATE embeddings SET vector = ?",
+                (b"broken",)
+            )
+            cache.connection.commit()
+            self.assertIsNone(cache.get(image, "model-v1"))
+            cache.close()
 
 
 if __name__ == "__main__":

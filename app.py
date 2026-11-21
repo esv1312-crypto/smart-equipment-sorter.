@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
-from core import classify_embedding, iter_image_files
+from core import EmbeddingCache, classify_embedding, iter_image_files
 
 APP_NAME = "Умный сортировщик оборудования"
 MODEL_ID = "openai/clip-vit-base-patch32"
@@ -255,6 +255,14 @@ class SorterApp:
     def set_status(self, text):
         self.root.after(0, self.status.set, text)
 
+    def _cached_embedding(self, cache, path):
+        vector = cache.get(path, MODEL_ID)
+        if vector is not None:
+            return vector
+        vector = self.engine.embed(path)
+        cache.put(path, MODEL_ID, vector)
+        return vector
+
     def start_analysis(self):
         if self.busy: return
         source = Path(self.source_dir.get())
@@ -270,28 +278,36 @@ class SorterApp:
         if not samples:
             messagebox.showwarning("Нет образцов", "Сначала добавьте хотя бы один фото-образец."); self.tabs.select(self.tab_samples); return
         self.data["threshold"] = float(self.threshold_var.get()); save_config(self.data)
+        output_text = self.output_dir.get().strip()
+        output_path = Path(output_text).expanduser().resolve() if output_text else None
+        threshold = float(self.data.get("threshold", .58))
         self.busy = True
-        threading.Thread(target=self._analyze_worker, args=(source, samples), daemon=True).start()
+        threading.Thread(
+            target=self._analyze_worker,
+            args=(source, samples, output_path, threshold),
+            daemon=True
+        ).start()
 
-    def _analyze_worker(self, source, samples):
+    def _analyze_worker(self, source, samples, output_path, threshold):
+        cache = None
         try:
+            cache = EmbeddingCache(BASE / "embeddings.sqlite3")
             self.engine.load(self.set_status)
             vectors = {}
             for cat, paths in samples.items():
                 vectors[cat] = []
                 for p in paths:
                     if Path(p).is_file():
-                        vectors[cat].append(self.engine.embed(p))
+                        vectors[cat].append(self._cached_embedding(cache, Path(p)))
             excluded = [BASE]
-            if self.output_dir.get().strip():
-                excluded.append(Path(self.output_dir.get()).expanduser().resolve())
+            if output_path is not None:
+                excluded.append(output_path)
             files = list(iter_image_files(source, IMAGE_EXTS, excluded))
             self.results = []
             self.root.after(0, self.progress.configure, {"maximum": max(1, len(files)), "value": 0})
-            threshold = float(self.data.get("threshold", .58))
             for i, path in enumerate(files, 1):
                 try:
-                    v = self.engine.embed(path)
+                    v = self._cached_embedding(cache, path)
                     category, best_score, margin, ranked = classify_embedding(
                         v, vectors, threshold=threshold, min_margin=0.035
                     )
@@ -308,10 +324,19 @@ class SorterApp:
                     self.root.after(0, self.progress.configure, {"value":i})
                     self.set_status(f"Обработано {i} из {len(files)} фотографий…")
             self.root.after(0, self.show_results)
-            self.set_status(f"Анализ завершён. Найдено фотографий: {len(files)}. Проверьте результаты перед копированием.")
+            self.set_status(
+                f"Анализ завершён. Фотографий: {len(files)}. "
+                f"Кеш: {cache.hits} найдено, {cache.writes} рассчитано заново. "
+                "Проверьте результаты перед копированием."
+            )
         except Exception:
             self.set_status("Ошибка анализа: " + traceback.format_exc(limit=1))
         finally:
+            if cache is not None:
+                try:
+                    cache.close()
+                except Exception:
+                    pass
             self.busy = False
 
     def show_results(self):
